@@ -1,3 +1,4 @@
+use anyhow::Ok;
 use oauth2::{basic::BasicClient, revocation::StandardRevocableToken, TokenResponse};
 // Alternatively, this can be oauth2::curl::http_client or a custom.
 use oauth2::reqwest::async_http_client;
@@ -17,7 +18,7 @@ pub struct Token {
     pub state: String,
 }
 
-pub async fn oauth() -> Result<Token, String> {
+pub async fn get_oauth_url() -> Result<oauth2::url::Url, anyhow::Error> {
     let config = config::global();
 
     let google_client_id = ClientId::new(
@@ -68,6 +69,13 @@ pub async fn oauth() -> Result<Token, String> {
         //))
         .set_pkce_challenge(pkce_code_challenge)
         .url();
+
+    return Ok(authorize_url);
+
+}
+
+pub async fn oauth() -> Result<Token, String> {
+    
 
     println!(
         "Open this URL in your browser:\n{}\n",
@@ -159,5 +167,6 @@ pub async fn oauth() -> Result<Token, String> {
             });
         }
     }
+    
     Err("No authentication was made".to_string())
 }

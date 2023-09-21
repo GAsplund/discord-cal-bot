@@ -1,8 +1,7 @@
 use google_calendar::Client;
 
 pub async fn do_call(code: String, state: String) {
-    let google_calendar = Client::new_from_env(code, state);
-    let mut client = google_calendar.await;
+    let client = Client::new(code, state, None, None, None);
 
     // Get the URL to request consent from the user.
     // You can optionally pass in scopes. If none are provided, then the
