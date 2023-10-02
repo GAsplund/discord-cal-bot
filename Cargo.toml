@@ -20,3 +20,5 @@ google-calendar3 = "*"
 yup-oauth2 = "8.3.0"
 
 oauth2 = "4.4.2"
+
+sqlx = { version = "0.7", features = [ "runtime-tokio", "sqlite" ] }

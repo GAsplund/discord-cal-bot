@@ -8,83 +8,100 @@ use calendar3::api::{Channel, Events};
 use calendar3::oauth2::{
     authenticator::Authenticator, hyper::client::HttpConnector, hyper_rustls::HttpsConnector,
 };
-use calendar3::{chrono, hyper, hyper_rustls, CalendarHub, Error};
+use calendar3::{chrono, hyper, hyper_rustls, CalendarHub};
 
 use uuid::Uuid;
 
-pub async fn get_cal(
-    auth: Authenticator<HttpsConnector<HttpConnector>>,
-) -> CalendarHub<HttpsConnector<HttpConnector>> {
-    CalendarHub::new(
-        hyper::Client::builder().build(
-            hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .https_or_http()
-                .enable_http1()
-                .build(),
-        ),
-        auth,
-    )
+use crate::discord;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
+pub static CALS: Mutex<BTreeMap<String, Calendar>> = Mutex::new(BTreeMap::new());
+
+#[derive(Clone)]
+pub struct Calendar {
+    hub: CalendarHub<HttpsConnector<HttpConnector>>,
+    calendar_id: String,
 }
 
-pub async fn watch(hub: CalendarHub<HttpsConnector<HttpConnector>>, uri: &str, calendar_id: &str) {
-    let mut req = Channel::default();
-    req.address = Some(uri.to_string());
-    req.id = Some(Uuid::new_v4().to_string());
-    req.type_ = Some("webhook".to_string());
+impl Calendar {
+    pub async fn from_auth(
+        auth: Authenticator<HttpsConnector<HttpConnector>>,
+        calendar_id: String,
+    ) -> Calendar {
+        let hub = CalendarHub::new(
+            hyper::Client::builder().build(
+                hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_native_roots()
+                    .https_or_http()
+                    .enable_http1()
+                    .build(),
+            ),
+            auth,
+        );
 
-    let result = hub
-        .events()
-        .watch(req, calendar_id)
-        .updated_min(chrono::Utc::now())
-        .time_min(chrono::Utc::now())
-        .single_events(true)
-        .show_hidden_invitations(false)
-        .show_deleted(true)
-        .always_include_email(false)
-        .doit()
-        .await;
+        let mut cal_id = calendar_id.clone();
+        if cal_id == "primary" {
+            let (_, calendar) = hub.calendars().get(&calendar_id).doit().await.expect("Could not get calendar");
+            cal_id = calendar.id.expect("Could not get calendar id");
+        }
 
-    match result {
-        Err(e) => match e {
-            // The Error enum provides details about what exactly happened.
-            // You can also just use its `Debug`, `Display` or `Error` traits
-            Error::HttpError(_)
-            | Error::Io(_)
-            | Error::MissingAPIKey
-            | Error::MissingToken(_)
-            | Error::Cancelled
-            | Error::UploadSizeLimitExceeded(_, _)
-            | Error::Failure(_)
-            | Error::BadRequest(_)
-            | Error::FieldClash(_)
-            | Error::JsonDecodeError(_, _) => println!("{}", e),
-        },
-        Ok(res) => println!("Success: {:?}", res),
+        let cal = Calendar { hub, calendar_id: cal_id.clone() };
+        CALS.lock().expect("Calendars mutex poisoned").insert(cal_id, cal.clone());
+
+        cal
     }
-}
 
-pub async fn get_newly_changed(
-    hub: CalendarHub<HttpsConnector<HttpConnector>>,
-    calendar_id: &str,
-) -> Result<(Response<Body>, Events), calendar3::Error> {
-    hub.events()
-        .list(calendar_id)
-        .updated_min(chrono::Utc::now() - chrono::Duration::minutes(1))
-        .show_deleted(true)
-        .doit()
-        .await
-}
+    pub fn from_id(id: String) -> Result<Calendar, String> {
+        let cals = CALS.lock();
+        if cals.is_err() {
+            return Err("Calendars mutex poisoned".to_string());
+        }
 
-pub async fn get_upcoming(
-    hub: CalendarHub<HttpsConnector<HttpConnector>>,
-    calendar_id: &str,
-) -> Result<(Response<Body>, Events), calendar3::Error> {
-    hub.events()
-        .list(calendar_id)
-        .time_min(chrono::Utc::now())
-        .time_max(chrono::Utc::now() + chrono::Duration::days(7))
-        .show_deleted(true)
-        .doit()
-        .await
+        let cals = cals.unwrap();
+        let cal = cals.get(&id);
+        if cal.is_none() {
+            return Err("No calendar found".to_string());
+        }
+        
+        Ok(cal.unwrap().clone())
+    }
+
+    pub async fn watch(&self, uri: &str) -> Result<(Response<Body>, Channel), calendar3::Error> {
+        let mut req = Channel::default();
+        req.address = Some(uri.to_string());
+        req.id = Some(Uuid::new_v4().to_string());
+        req.type_ = Some("webhook".to_string());
+        req.token = Some(self.calendar_id.clone());
+
+        self.hub.events().watch(req, &self.calendar_id).doit().await
+    }
+
+    pub async fn get_newly_changed(&self) -> Result<(Response<Body>, Events), calendar3::Error> {
+        self.hub
+            .events()
+            .list(&self.calendar_id)
+            .updated_min(chrono::Utc::now() - chrono::Duration::minutes(1))
+            .show_deleted(true)
+            .doit()
+            .await
+    }
+
+    pub async fn notify_newly_changed(&self) {
+        let (_, events) = self.get_newly_changed().await.expect("Couldn't get events");
+        for event in events.items.unwrap() {
+            discord::events::notify_event(event, self.calendar_id.clone()).await;
+        }
+    }
+
+    pub async fn get_upcoming(&self) -> Result<(Response<Body>, Events), calendar3::Error> {
+        self.hub
+            .events()
+            .list(&self.calendar_id)
+            .time_min(chrono::Utc::now())
+            .time_max(chrono::Utc::now() + chrono::Duration::days(7))
+            .show_deleted(true)
+            .doit()
+            .await
+    }
 }

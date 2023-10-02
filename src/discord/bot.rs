@@ -1,4 +1,7 @@
+use std::sync::{OnceLock, Arc};
+
 use serenity::async_trait;
+use serenity::http::Http;
 use serenity::prelude::*;
 use serenity::model::channel::Message;
 use serenity::framework::standard::macros::{command, group};
@@ -15,7 +18,13 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {}
 
-pub async fn start_bot() {
+static HTTP: OnceLock<Arc<Http>> = OnceLock::new();
+
+pub fn get_http() -> Option<Arc<Http>> {
+    HTTP.get().cloned()
+}
+
+pub async fn start() {
     let framework = StandardFramework::new()
         .configure(|c| c.prefix(";"))
         .group(&GENERAL_GROUP);
@@ -30,6 +39,11 @@ pub async fn start_bot() {
         .framework(framework)
         .await
         .expect("Error creating client");
+
+    if let Err(why) = HTTP.set(client.cache_and_http.http.clone()) {
+        println!("Error setting HTTP client: {:?}", why);
+        return;
+    }
 
     // start listening for events by starting a single shard
     if let Err(why) = client.start().await {

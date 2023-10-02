@@ -1,13 +1,13 @@
 use tokio::task;
 use localtunnel_client::{open_tunnel, broadcast, ClientConfig};
 use std::{net::SocketAddr, collections::HashMap};
-use axum::{response::Html, routing::get, Router, http::header::HeaderMap, extract::Query};
+use axum::{response::Html, routing::{get, post}, Router, http::header::HeaderMap, extract::Query};
 use uuid::Uuid;
 
 pub fn run_webhook_server() -> String {
     // build our application with a route
     let app = Router::new()
-        .route("/webhook", get(webhook_handler))
+        .route("/webhook", post(webhook_handler))
         .route("/oauth", get(oauth_handler));
 
     // run it
@@ -23,12 +23,26 @@ pub fn run_webhook_server() -> String {
     addr.to_string()
 }
 
-async fn webhook_handler(headers: HeaderMap) -> Html<&'static str> {
-    let _resource_id = headers.get("x-goog-resource-id").unwrap();
-    let _channel_token = headers.get("x-goog-channel-token").unwrap();
-    let _channel_id = headers.get("x-goog-channel-id").unwrap();
-    let _resource_state = headers.get("x-goog-resource-state").unwrap();
-    Html("<h1>Hello, World!</h1>")
+async fn webhook_handler(headers: HeaderMap) -> Result<String, String> {
+    let resource_state = headers.get("x-goog-resource-state").expect("No resource state");
+    if resource_state == "sync" {
+        return Ok("Sync received".to_string());
+    }
+
+    //let resource_id = headers.get("x-goog-resource-id").expect("No resource ID");
+    //let channel_id = headers.get("x-goog-channel-id").expect("No channel ID");
+    let channel_token = headers.get("x-goog-channel-token").expect("No channel token");
+
+    println!("Received webhook for id {}", channel_token.to_str().unwrap());
+
+    let cal = crate::google_calendar::calendar::Calendar::from_id(channel_token.to_str().unwrap().to_string());
+    if cal.is_err() {
+        return Err("No calendar found".to_string());
+    }
+
+    cal.unwrap().notify_newly_changed().await;
+    
+    Ok("Webhook received".to_string())
 }
 
 async fn oauth_handler(Query(params): Query<HashMap<String, String>>) -> Html<&'static str> {
@@ -38,7 +52,7 @@ async fn oauth_handler(Query(params): Query<HashMap<String, String>>) -> Html<&'
 }
 
 pub fn run_localtunnel() -> String {
-    let (notify_shutdown, _) = broadcast::channel(1);
+    let (notify_shutdown, _) = broadcast::channel(16);
 
     let uuid = Uuid::new_v4();
 
@@ -55,8 +69,8 @@ pub fn run_localtunnel() -> String {
     task::spawn(async move {
         println!("Opening tunnel on https://{}.loca.lt/", uuid);
         open_tunnel(config).await.expect("Failed to open tunnel");
-        let _ = notify_shutdown.send(());
+        //let _ = notify_shutdown.send(());
     });
 
-    uuid.to_string()
+    format!("https://{}.loca.lt", uuid)
 }

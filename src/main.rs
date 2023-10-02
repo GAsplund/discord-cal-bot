@@ -2,31 +2,16 @@
 mod discord;
 mod config;
 mod google_calendar;
+mod database;
 
-use discord::bot;
 use crate::google_calendar::webhooks;
 use crate::google_calendar::google_oauth;
 use crate::google_calendar::calendar;
+use crate::discord::bot;
+use crate::calendar::Calendar;
 
 #[tokio::main]
 async fn main() {
-    /*webhooks::run_webhook_server();
-
-    let local_tunnel_url = webhooks::run_localtunnel();
-    let oauth_redirect = local_tunnel_url + "/oauth";
-    let webhook_url = local_tunnel_url + "/webhook";
-
-    let (g_auth_url, client) = google_oauth::get_oauth_url(oauth_redirect).await;
-    let result = google_oauth::oauth(&g_auth_url, &client).await.unwrap();
-    println!("Code: {}, State: {}", result.code, result.state);
-    calendar::do_call(result.code, &client).await;
-    tokio::join!(bot::start_bot());*/
-
-    /*match google_calendar::google_oauth::authenticate().await {
-        Ok(token) => println!("The token is {:?}", token),
-        Err(e) => println!("error: {:?}", e),
-    }*/
-
     webhooks::run_webhook_server();
 
     let local_tunnel_url = webhooks::run_localtunnel();
@@ -37,8 +22,8 @@ async fn main() {
         .await
         .expect("Failed to authenticate");
 
-    let cal = calendar::get_cal(auth).await;
-    calendar::watch(cal, &webhook_url, "primary").await;
+    let cal = Calendar::from_auth(auth, "primary".to_string()).await;
+    cal.watch(&webhook_url).await;
 
-    tokio::join!(bot::start_bot());
+    tokio::join!(bot::start());
 }
