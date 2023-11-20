@@ -1,4 +1,3 @@
 /target
 config.yml
-credentials.json
-tokencache.json
+auth

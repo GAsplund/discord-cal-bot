@@ -28,7 +28,7 @@ impl Calendar {
     pub async fn from_auth(
         auth: Authenticator<HttpsConnector<HttpConnector>>,
         calendar_id: String,
-    ) -> Calendar {
+    ) -> Option<Calendar> {
         let hub = CalendarHub::new(
             hyper::Client::builder().build(
                 hyper_rustls::HttpsConnectorBuilder::new()
@@ -42,14 +42,21 @@ impl Calendar {
 
         let mut cal_id = calendar_id.clone();
         if cal_id == "primary" {
-            let (_, calendar) = hub.calendars().get(&calendar_id).doit().await.expect("Could not get calendar");
-            cal_id = calendar.id.expect("Could not get calendar id");
+            let res = hub.calendars().get(&calendar_id).doit().await;
+            match res {
+                Ok(calendar) => {
+                    cal_id = calendar.1.id.expect("Could not get calendar id");
+                }
+                Err(_) => {
+                    return None;
+                }
+            }
         }
 
         let cal = Calendar { hub, calendar_id: cal_id.clone() };
         CALS.lock().expect("Calendars mutex poisoned").insert(cal_id, cal.clone());
 
-        cal
+        Some(cal)
     }
 
     pub fn from_id(id: String) -> Result<Calendar, String> {
@@ -104,4 +111,21 @@ impl Calendar {
             .doit()
             .await
     }
+}
+
+pub async fn list_calendars(auth: Authenticator<HttpsConnector<HttpConnector>>) -> Vec<(String, String)> {
+    let hub = CalendarHub::new(
+        hyper::Client::builder().build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        ),
+        auth,
+    );
+
+    hub.calendar_list().list().doit().await.expect("Couldn't get calendars").1.items.unwrap().iter().map(|cal| {
+        (cal.id.clone().expect("Couldn't get calendar id"), cal.summary.clone().expect("Couldn't get calendar summary"))
+    }).collect()
 }
