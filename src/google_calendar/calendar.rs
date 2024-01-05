@@ -1,6 +1,7 @@
 extern crate google_calendar3 as calendar3;
 
 use std::default::Default;
+use std::time::Instant;
 
 use axum::body::Body;
 use axum::http::Response;
@@ -14,9 +15,11 @@ use uuid::Uuid;
 
 use crate::discord;
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
-pub static CALS: Mutex<BTreeMap<String, Calendar>> = Mutex::new(BTreeMap::new());
+pub static CHANNEL_CALENDARS: Mutex<BTreeMap<String, u64>> = Mutex::const_new(BTreeMap::new());
+pub static CALENDARS: Mutex<BTreeMap<String, Calendar>> = Mutex::const_new(BTreeMap::new());
+pub static WATCHES: Mutex<BTreeMap<String, Instant>> = Mutex::const_new(BTreeMap::new());
 
 #[derive(Clone)]
 pub struct Calendar {
@@ -54,18 +57,13 @@ impl Calendar {
         }
 
         let cal = Calendar { hub, calendar_id: cal_id.clone() };
-        CALS.lock().expect("Calendars mutex poisoned").insert(cal_id, cal.clone());
+        CALENDARS.lock().await.insert(cal_id, cal.clone());
 
         Some(cal)
     }
 
-    pub fn from_id(id: String) -> Result<Calendar, String> {
-        let cals = CALS.lock();
-        if cals.is_err() {
-            return Err("Calendars mutex poisoned".to_string());
-        }
-
-        let cals = cals.unwrap();
+    pub async fn from_id(id: String) -> Result<Calendar, String> {
+        let cals = CALENDARS.lock().await;
         let cal = cals.get(&id);
         if cal.is_none() {
             return Err("No calendar found".to_string());
@@ -105,7 +103,7 @@ impl Calendar {
         self.hub
             .events()
             .list(&self.calendar_id)
-            .time_min(chrono::Utc::now())
+            .time_min(chrono::Utc::now() - chrono::Duration::hours(5))
             .time_max(chrono::Utc::now() + chrono::Duration::days(7))
             .show_deleted(true)
             .doit()

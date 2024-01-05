@@ -35,7 +35,7 @@ async fn webhook_handler(headers: HeaderMap) -> Result<String, String> {
 
     println!("Received webhook for id {}", channel_token.to_str().unwrap());
 
-    let cal = crate::google_calendar::calendar::Calendar::from_id(channel_token.to_str().unwrap().to_string());
+    let cal = crate::google_calendar::calendar::Calendar::from_id(channel_token.to_str().unwrap().to_string()).await;
     if cal.is_err() {
         return Err("No calendar found".to_string());
     }

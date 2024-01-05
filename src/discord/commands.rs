@@ -1,4 +1,6 @@
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serenity::builder::CreateComponents;
 use serenity::model::application::interaction::{
@@ -15,8 +17,20 @@ use serenity::{
     model::channel::Message,
 };
 use tokio::time::timeout;
+use yup_oauth2::authenticator::Authenticator;
 
+use crate::google_calendar::calendar::{CALENDARS, CHANNEL_CALENDARS, WATCHES};
 use crate::google_calendar::{calendar::list_calendars, google_oauth};
+use crate::WEBHOOK_URL;
+
+pub static PENDING_AUTHENTICATIONS: Mutex<
+    BTreeMap<
+        (u64, u64),
+        Authenticator<
+            yup_oauth2::hyper_rustls::HttpsConnector<yup_oauth2::hyper::client::HttpConnector>,
+        >,
+    >,
+> = Mutex::new(BTreeMap::new());
 
 #[group]
 #[commands(add_calendar)]
@@ -36,6 +50,7 @@ pub async fn add_calendar(ctx: &Context, msg: &Message) -> CommandResult {
     match auth {
         Ok(auth) => {
             let auth = auth.expect("Failed to authenticate");
+            let auth_stored = auth.clone();
             let cals = list_calendars(auth).await;
 
             let menu: CreateSelectMenu = CreateSelectMenu::default()
@@ -55,7 +70,14 @@ pub async fn add_calendar(ctx: &Context, msg: &Message) -> CommandResult {
                 .send_message(&ctx.http, |m| {
                     m.components(|c| c.create_action_row(|row| row.add_select_menu(menu)))
                 })
-                .await;
+                .await
+                .and_then(|_| {
+                    PENDING_AUTHENTICATIONS
+                        .lock()
+                        .expect("Pending authentications mutex poisoned")
+                        .insert((msg.author.id.0, msg.channel_id.0), auth_stored.into());
+                    Ok(())
+                });
         }
         Err(_) => {
             let _ = msg.reply(ctx, "Authentication timed out.").await;
@@ -67,6 +89,29 @@ pub async fn add_calendar(ctx: &Context, msg: &Message) -> CommandResult {
 
 pub async fn bind_calendar_interaction(ctx: &Context, interaction: MessageComponentInteraction) {
     let choice = &interaction.data.values[0];
+    let auth = PENDING_AUTHENTICATIONS
+        .lock()
+        .expect("Pending authentications mutex poisoned")
+        .remove(&(interaction.user.id.0, interaction.channel_id.0))
+        .unwrap();
+    let cal =
+        crate::google_calendar::calendar::Calendar::from_auth(auth.clone(), choice.to_string())
+            .await
+            .unwrap();
+    let _ = cal.watch(WEBHOOK_URL.get().unwrap()).await;
+    let week = Duration::from_secs(60 * 60 * 24 * 7);
+    CALENDARS
+        .lock()
+        .await
+        .insert(choice.to_string(), cal.clone());
+    CHANNEL_CALENDARS
+        .lock()
+        .await
+        .insert(choice.to_string(), interaction.channel_id.0);
+    WATCHES
+        .lock()
+        .await
+        .insert(choice.to_string(), Instant::now() + week);
 
     let _ = interaction
         .create_interaction_response(&ctx.http, |response| {

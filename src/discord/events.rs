@@ -34,6 +34,18 @@ pub fn get_state(event: Event) -> EventType {
     return EventType::Update;
 }
 
+pub async fn remind_event(event: Event, calendar_id: String, ping: u64) {
+    let channels = database::get_notify_channels_for_event(calendar_id);
+
+    for channel in channels {
+        let msg_chan = ChannelId(channel);
+        let msg = format!("<@{}> {} is occurring soon!", ping, event.clone().summary.unwrap());
+
+        let http = get_http().expect("Couldn't get HTTP client");
+        let _ = msg_chan.say(http, msg).await;
+    }
+}
+
 pub async fn notify_event(event: Event, calendar_id: String) {
     let channels = database::get_notify_channels_for_event(calendar_id);
 
